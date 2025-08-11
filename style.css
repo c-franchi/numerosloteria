@@ -1,29 +1,11 @@
-/* Custom styles for the static Lotofácil suggestions page */
-body {
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-}
-
-h1 {
-    font-size: 1.8rem;
-}
-
-/* Larger headings inside cards */
-.card-title {
-    font-weight: 600;
-    font-size: 1.25rem;
-}
-
-/* Table styling adjustments */
-table.table td {
-    font-size: 0.9rem;
-}
-
-#strategy1, #strategy2 {
-    word-break: break-word;
-}
-
-@media (max-width: 576px) {
-    h1 {
-        font-size: 1.5rem;
-    }
-}
+/* Ajustes mínimos – o visual principal vem do Tailwind */
+.badge {
+    @apply inline-flex items-center justify-center rounded-full bg-slate-100 text-slate-800 px-3 h-8 text-sm font-medium;
+  }
+  .badge-strong {
+    @apply bg-indigo-600 text-white;
+  }
+  .number-chip {
+    @apply inline-flex items-center justify-center rounded-full border border-slate-200 bg-white h-9 w-9 font-semibold;
+  }
+  
