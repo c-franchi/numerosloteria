@@ -1,4 +1,5 @@
-// Lê data/draws.json, renderiza sorteios recentes e gera 3 estratégias
+// Lê draws.json (estático) para exibir tabela; botão "Atualizar" chama /api/update (Vercel)
+// e substitui os dados em memória para gerar as sugestões.
 document.addEventListener('DOMContentLoaded', () => {
   const resultsSection = document.getElementById('results');
   const strategy1Elem = document.getElementById('strategy1');
@@ -15,10 +16,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let draws = [];
 
-  // Dark mode toggle
+  // Dark mode
   darkToggle?.addEventListener('click', () => {
-    const html = document.documentElement;
-    html.classList.toggle('dark');
+    document.documentElement.classList.toggle('dark');
     document.body.classList.toggle('bg-slate-900');
     document.body.classList.toggle('text-slate-100');
   });
@@ -27,6 +27,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const [d, m, y] = br.split('/').map(Number);
     return new Date(y, m - 1, d);
   };
+
+  function normalize(list) {
+    return list.map(d => ({
+      concurso: d.concurso,
+      date: parseBRDate(d.data),
+      data: d.data,
+      dezenas: d.dezenas.map(Number).sort((a,b)=>a-b)
+    })).sort((a, b) => b.date - a.date);
+  }
 
   function renderRecentDraws(list) {
     if (!tableBody) return;
@@ -46,52 +55,58 @@ document.addEventListener('DOMContentLoaded', () => {
       `;
       tableBody.appendChild(tr);
     });
-    if (drawCount) drawCount.textContent = `Exibindo ${Math.min(10, list.length)} de ${list.length}`;
+    drawCount && (drawCount.textContent = `Exibindo ${Math.min(10, list.length)} de ${list.length}`);
   }
 
-  function loadDrawsAndRender() {
-    return fetch('data/draws.json?_=' + Date.now()) // cache-buster
-      .then(r => r.json())
-      .then(json => {
-        draws = json.map(d => ({
-          concurso: d.concurso,
-          date: parseBRDate(d.data),
-          data: d.data,
-          dezenas: d.dezenas.map(Number).sort((a,b)=>a-b)
-        })).sort((a, b) => b.date - a.date);
-
-        renderRecentDraws(draws);
-      })
-      .catch(err => {
-        console.warn('Não foi possível carregar data/draws.json', err);
-      });
+  // Carrega o JSON estático (fallback/primeiro render)
+  function loadStatic() {
+    return fetch('data/draws.json?_=' + Date.now())
+      .then(r => r.ok ? r.json() : Promise.reject(new Error('Falha ao carregar draws.json')))
+      .then(json => { draws = normalize(json); renderRecentDraws(draws); })
+      .catch(err => console.warn(err));
   }
 
-  // Carregamento inicial
-  loadDrawsAndRender().then(() => {
+  // Chama a função da Vercel e atualiza a memória (sem gravar arquivo)
+  async function updateFromAPI() {
+    const res = await fetch('/api/update', { method: 'POST' });
+    const text = await res.text();
+    let payload;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      throw new Error('Resposta inválida do servidor (não é JSON).');
+    }
+    if (!res.ok || !payload.ok || !Array.isArray(payload.data)) {
+      throw new Error(payload?.message || `Erro ${res.status}`);
+    }
+    draws = normalize(payload.data);
+    renderRecentDraws(draws);
+  }
+
+  // Inicialização
+  loadStatic().then(() => {
     recentSection?.classList.remove('hidden');
   });
 
-  // Atualização via backend Flask (/api/update)
+  // Botão "Atualizar"
   updateBtn?.addEventListener('click', async () => {
     updateBtn.disabled = true;
     const original = updateBtn.textContent;
     updateBtn.textContent = 'Atualizando...';
+
     try {
-      const res = await fetch('/api/update', { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.message || 'Erro na atualização');
-      await loadDrawsAndRender();
-      alert('Sorteios atualizados com sucesso!');
+      await updateFromAPI();
+      Swal.fire({ icon: 'success', title: 'Atualizado!', text: 'Sorteios atualizados com sucesso.' });
     } catch (err) {
       console.error(err);
-      alert('Falha ao atualizar: ' + err.message);
+      Swal.fire({ icon: 'error', title: 'Falha ao atualizar', text: String(err) });
     } finally {
       updateBtn.textContent = original;
       updateBtn.disabled = false;
     }
   });
 
+  // ===== Lógica das estratégias =====
   function filterByPeriod(period) {
     const now = new Date();
     if (period === 'last_week') {
@@ -102,15 +117,12 @@ document.addEventListener('DOMContentLoaded', () => {
       const monthAgo = new Date(now); monthAgo.setMonth(now.getMonth() - 1);
       return draws.filter(d => d.date >= monthAgo);
     }
-    if (period === 'last_10') {
-      return draws.slice(0, 10);
-    }
-    return draws; // all
+    if (period === 'last_10') return draws.slice(0, 10);
+    return draws;
   }
 
-  // ==== Estatísticas de apoio ====
   function frequencies(list) {
-    const overall = Array(26).fill(0); // 1..25
+    const overall = Array(26).fill(0);
     const cols = [Array(26).fill(0), Array(26).fill(0), Array(26).fill(0)];
     list.forEach(d => {
       d.dezenas.forEach((n, idx) => {
@@ -128,7 +140,6 @@ document.addEventListener('DOMContentLoaded', () => {
     arr.sort((a,b) => b[1] - a[1] || a[0] - b[0]);
     return arr.slice(0, k).map(x => x[0]);
   }
-
   function bottomK(freq, k) {
     const arr = [];
     for (let n = 1; n <= 25; n++) arr.push([n, freq[n]]);
@@ -137,13 +148,12 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   const isEven = n => n % 2 === 0;
-  const isLow  = n => n <= 13; // altos/baixos
+  const isLow  = n => n <= 13;
 
   function countRepeats(a, b) {
     const setB = new Set(b);
     return a.filter(x => setB.has(x)).length;
   }
-
   function mode(arr) {
     const map = new Map();
     arr.forEach(v => map.set(v, (map.get(v)||0)+1));
@@ -151,78 +161,60 @@ document.addEventListener('DOMContentLoaded', () => {
     map.forEach((c,v) => { if (c > bestC) { best = v; bestC = c; }});
     return best;
   }
-
-  function parityDistribution(list) {
-    return mode(list.map(d => d.dezenas.filter(isEven).length)); // alvo: #pares
-  }
-
-  function lowHighDistribution(list) {
-    return mode(list.map(d => d.dezenas.filter(isLow).length)); // alvo: #baixos (1..13)
-  }
-
+  function parityDistribution(list) { return mode(list.map(d => d.dezenas.filter(isEven).length)); }
+  function lowHighDistribution(list) { return mode(list.map(d => d.dezenas.filter(isLow).length)); }
   function repeatsDistribution(list) {
     const reps = [];
-    for (let i = 0; i < list.length - 1; i++) {
-      reps.push(countRepeats(list[i].dezenas, list[i+1].dezenas));
-    }
-    return reps.length ? mode(reps) : 9; // fallback razoável
+    for (let i = 0; i < list.length - 1; i++) reps.push(countRepeats(list[i].dezenas, list[i+1].dezenas));
+    return reps.length ? mode(reps) : 9;
   }
 
   function renderChips(el, nums, strong=false) {
-    el.innerHTML = nums
-      .slice().sort((a,b)=>a-b)
-      .map(n => `<span class="badge ${strong?'badge-strong':''}">${String(n).padStart(2,'0')}</span>`)
-      .join('');
+    el.innerHTML = nums.slice().sort((a,b)=>a-b)
+      .map(n => `<span class="badge ${strong?'badge-strong':''}">${String(n).padStart(2,'0')}</span>`).join('');
   }
 
-  // ==== Estratégia 3: Padrões Aprendidos ====
   function generatePatternFitSuggestion(list) {
-    const targetEven = parityDistribution(list);     // pares
-    const targetLow  = lowHighDistribution(list);    // baixos (1..13)
-    let targetRep    = repeatsDistribution(list);    // repetidas
+    const targetEven = parityDistribution(list);
+    const targetLow  = lowHighDistribution(list);
+    let targetRep    = repeatsDistribution(list);
     if (targetRep < 7) targetRep = 8;
     if (targetRep > 11) targetRep = 10;
 
     const last = list[0];
     const { overall } = frequencies(list);
 
-    // Começa repetindo do último concurso (mais frequentes primeiro)
-    const repeatedCandidates = last.dezenas
-      .slice()
-      .sort((a,b)=> overall[b]-overall[a] || a-b);
-
+    const repeatedCandidates = last.dezenas.slice().sort((a,b)=> overall[b]-overall[a] || a-b);
     const pick = new Set();
     for (const n of repeatedCandidates) {
       if (pick.size >= targetRep) break;
       pick.add(n);
     }
 
-    // Completa respeitando paridade e altos/baixos
     const countEven = () => [...pick].filter(isEven).length;
     const countLow  = () => [...pick].filter(isLow).length;
 
-    function canAdd(n, byOverallDesc) {
+    const byOverallDesc = [];
+    for (let n = 1; n <= 25; n++) byOverallDesc.push([n, overall[n]]);
+    byOverallDesc.sort((a,b)=> b[1]-a[1] || a[0]-b[0]);
+
+    function canAdd(n) {
       const nextEven = countEven() + (isEven(n)?1:0);
       const nextLow  = countLow()  + (isLow(n)?1:0);
       const remaining = 15 - (pick.size + 1);
       return nextEven <= targetEven && nextLow <= targetLow || remaining < 0;
     }
 
-    const byOverallDesc = [];
-    for (let n = 1; n <= 25; n++) byOverallDesc.push([n, overall[n]]);
-    byOverallDesc.sort((a,b)=> b[1]-a[1] || a[0]-b[0]);
-
     for (const [n] of byOverallDesc) {
       if (pick.size >= 15) break;
       if (pick.has(n)) continue;
-      if (canAdd(n, byOverallDesc)) pick.add(n);
+      if (canAdd(n)) pick.add(n);
     }
     for (const [n] of byOverallDesc) {
       if (pick.size >= 15) break;
       if (!pick.has(n)) pick.add(n);
     }
 
-    // Rebalance (paridade e baixos) se exceder
     function rebalance(targetCount, getterFn, predicate) {
       let current = getterFn();
       if (current <= targetCount) return;
@@ -245,7 +237,6 @@ document.addEventListener('DOMContentLoaded', () => {
     return [...pick].slice(0,15);
   }
 
-  // Submit -> gerar sugestões
   form.addEventListener('submit', (ev) => {
     ev.preventDefault();
     submitBtn.disabled = true;
@@ -255,25 +246,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const list = filterByPeriod(period);
 
     if (!list.length) {
-      alert('Nenhum sorteio encontrado no período.');
+      Swal.fire({ icon: 'warning', title: 'Sem dados', text: 'Nenhum sorteio encontrado no período.' });
       submitBtn.disabled = false;
       submitBtn.textContent = 'Gerar sugestões';
       return;
     }
 
     const { overall, cols } = frequencies(list);
-
-    // Estratégia 1 — Hot Columns (5 por coluna)
-    const s1 = [...new Set([
-      ...topK(cols[0], 5),
-      ...topK(cols[1], 5),
-      ...topK(cols[2], 5)
-    ])].slice(0, 15);
-
-    // Estratégia 2 — Cold Numbers (15 menos frequentes)
+    const s1 = [...new Set([...topK(cols[0],5), ...topK(cols[1],5), ...topK(cols[2],5)])].slice(0,15);
     const s2 = bottomK(overall, 15);
-
-    // Estratégia 3 — Padrões Aprendidos
     const s3 = generatePatternFitSuggestion(list);
 
     renderChips(strategy1Elem, s1, true);
