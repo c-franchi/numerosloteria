@@ -1,13 +1,18 @@
-// Lê draws.json (estático) para exibir tabela; botão "Atualizar" chama /api/update (Vercel)
-// e substitui os dados em memória para gerar as sugestões.
+// Mobile-friendly + loaders + 3 estratégias + atualização via /api/update (Vercel)
 document.addEventListener('DOMContentLoaded', () => {
   const resultsSection = document.getElementById('results');
   const strategy1Elem = document.getElementById('strategy1');
   const strategy2Elem = document.getElementById('strategy2');
   const strategy3Elem = document.getElementById('strategy3');
-  const submitBtn = document.getElementById('btn-submit');
-  const updateBtn = document.getElementById('btn-update');
+
   const form = document.getElementById('period-form');
+  const submitBtn = document.getElementById('btn-submit');
+  const spinGenerate = document.getElementById('spin-generate');
+  const txtGenerate = document.getElementById('txt-generate');
+
+  const updateBtn = document.getElementById('btn-update');
+  const spinUpdate = document.getElementById('spin-update');
+  const txtUpdate = document.getElementById('txt-update');
 
   const recentSection = document.getElementById('recent-draws');
   const tableBody = document.getElementById('draws-table-body');
@@ -23,19 +28,17 @@ document.addEventListener('DOMContentLoaded', () => {
     document.body.classList.toggle('text-slate-100');
   });
 
+  // Util
   const parseBRDate = (br) => {
     const [d, m, y] = br.split('/').map(Number);
     return new Date(y, m - 1, d);
   };
-
-  function normalize(list) {
-    return list.map(d => ({
-      concurso: d.concurso,
-      date: parseBRDate(d.data),
-      data: d.data,
-      dezenas: d.dezenas.map(Number).sort((a,b)=>a-b)
-    })).sort((a, b) => b.date - a.date);
-  }
+  const normalize = (list) => list.map(d => ({
+    concurso: d.concurso,
+    date: parseBRDate(d.data),
+    data: d.data,
+    dezenas: d.dezenas.map(Number).sort((a,b)=>a-b)
+  })).sort((a,b)=> b.date - a.date);
 
   function renderRecentDraws(list) {
     if (!tableBody) return;
@@ -58,7 +61,7 @@ document.addEventListener('DOMContentLoaded', () => {
     drawCount && (drawCount.textContent = `Exibindo ${Math.min(10, list.length)} de ${list.length}`);
   }
 
-  // Carrega o JSON estático (fallback/primeiro render)
+  // Carrega JSON estático (primeiro render / fallback)
   function loadStatic() {
     return fetch('data/draws.json?_=' + Date.now())
       .then(r => r.ok ? r.json() : Promise.reject(new Error('Falha ao carregar draws.json')))
@@ -66,21 +69,26 @@ document.addEventListener('DOMContentLoaded', () => {
       .catch(err => console.warn(err));
   }
 
-  // Chama a função da Vercel e atualiza a memória (sem gravar arquivo)
+  // Atualização via Serverless (não persiste em arquivo; atualiza em memória)
   async function updateFromAPI() {
     const res = await fetch('/api/update', { method: 'POST' });
     const text = await res.text();
     let payload;
-    try {
-      payload = JSON.parse(text);
-    } catch {
-      throw new Error('Resposta inválida do servidor (não é JSON).');
-    }
+    try { payload = JSON.parse(text); }
+    catch { throw new Error('Resposta inválida do servidor (não é JSON).'); }
     if (!res.ok || !payload.ok || !Array.isArray(payload.data)) {
       throw new Error(payload?.message || `Erro ${res.status}`);
     }
     draws = normalize(payload.data);
     renderRecentDraws(draws);
+  }
+
+  // ====== Estado de carregando nos botões ======
+  function setLoading(btn, spinnerEl, textEl, loading, labelWhenIdle) {
+    btn.disabled = loading;
+    btn.setAttribute('aria-busy', String(loading));
+    if (spinnerEl) spinnerEl.classList.toggle('hidden', !loading);
+    if (textEl) textEl.textContent = loading ? 'Aguarde…' : labelWhenIdle;
   }
 
   // Inicialização
@@ -90,19 +98,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Botão "Atualizar"
   updateBtn?.addEventListener('click', async () => {
-    updateBtn.disabled = true;
-    const original = updateBtn.textContent;
-    updateBtn.textContent = 'Atualizando...';
-
+    setLoading(updateBtn, spinUpdate, txtUpdate, true, 'Atualizar sorteios agora');
     try {
       await updateFromAPI();
-      Swal.fire({ icon: 'success', title: 'Atualizado!', text: 'Sorteios atualizados com sucesso.' });
+      // pequeno feedback visual (toast simples)
+      if (window.Swal) Swal.fire({ icon: 'success', title: 'Atualizado!', timer: 1400, showConfirmButton: false });
     } catch (err) {
       console.error(err);
-      Swal.fire({ icon: 'error', title: 'Falha ao atualizar', text: String(err) });
+      if (window.Swal) Swal.fire({ icon: 'error', title: 'Falha ao atualizar', text: String(err) });
+      else alert('Falha ao atualizar: ' + String(err));
     } finally {
-      updateBtn.textContent = original;
-      updateBtn.disabled = false;
+      setLoading(updateBtn, spinUpdate, txtUpdate, false, 'Atualizar sorteios agora');
     }
   });
 
@@ -133,7 +139,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     return { overall, cols };
   }
-
   function topK(freq, k) {
     const arr = [];
     for (let n = 1; n <= 25; n++) arr.push([n, freq[n]]);
@@ -237,18 +242,18 @@ document.addEventListener('DOMContentLoaded', () => {
     return [...pick].slice(0,15);
   }
 
+  // Submit -> gerar sugestões
   form.addEventListener('submit', (ev) => {
     ev.preventDefault();
-    submitBtn.disabled = true;
-    submitBtn.textContent = 'Gerando...';
+    setLoading(submitBtn, spinGenerate, txtGenerate, true, 'Gerar sugestões');
 
     const period = new FormData(form).get('period');
     const list = filterByPeriod(period);
 
     if (!list.length) {
-      Swal.fire({ icon: 'warning', title: 'Sem dados', text: 'Nenhum sorteio encontrado no período.' });
-      submitBtn.disabled = false;
-      submitBtn.textContent = 'Gerar sugestões';
+      if (window.Swal) Swal.fire({ icon: 'warning', title: 'Sem dados', text: 'Nenhum sorteio no período.' });
+      else alert('Nenhum sorteio no período.');
+      setLoading(submitBtn, spinGenerate, txtGenerate, false, 'Gerar sugestões');
       return;
     }
 
@@ -262,7 +267,14 @@ document.addEventListener('DOMContentLoaded', () => {
     renderChips(strategy3Elem, s3, true);
 
     resultsSection.classList.remove('hidden');
-    submitBtn.disabled = false;
-    submitBtn.textContent = 'Gerar sugestões';
+    setLoading(submitBtn, spinGenerate, txtGenerate, false, 'Gerar sugestões');
   });
+
+  // helper
+  function setLoading(btn, spinnerEl, textEl, loading, idleText) {
+    btn.disabled = loading;
+    btn.setAttribute('aria-busy', String(loading));
+    if (spinnerEl) spinnerEl.classList.toggle('hidden', !loading);
+    if (textEl) textEl.textContent = loading ? 'Aguarde…' : idleText;
+  }
 });
