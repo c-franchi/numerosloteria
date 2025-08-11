@@ -1,54 +1,31 @@
-"""
-Script to download all Lotofácil results and save them to a local JSON file.
-
-Usage:
-    python3 update_data.py
-
-This script fetches the list of draws from the public API provided by
-https://loteriascaixa-api.herokuapp.com/api/lotofacil and stores the
-result in the ``data/draws.json`` file within the same directory.
-
-The JSON structure is an array of objects containing at least the
-following fields for each draw:
-    - concurso: draw number
-    - data: date in DD/MM/YYYY format
-    - dezenas: list of 15 drawn numbers in ascending order
-
-The resulting file can be consumed by the frontend JavaScript code in
-``main.js``, which performs the frequency analysis and number
-suggestions.
-"""
-
-import json
-import pathlib
+# update_data.py
+import json, os, sys
+from pathlib import Path
 import requests
 
+DATA_DIR = Path(__file__).parent / "data"
+DATA_DIR.mkdir(exist_ok=True)
+OUT_FILE = DATA_DIR / "draws.json"
 
-RESULTS_API = "https://loteriascaixa-api.herokuapp.com/api/lotofacil"
+API_URL = "https://loteriascaixa-api.herokuapp.com/api/lotofacil"
 
-def main() -> None:
-    dest = pathlib.Path(__file__).resolve().parent / 'data' / 'draws.json'
-    dest.parent.mkdir(parents=True, exist_ok=True)
+def update_draws():
     try:
-        print("Fetching results from API...", end='', flush=True)
-        resp = requests.get(RESULTS_API, timeout=15)
+        print("Fetching results from API...", end="", flush=True)
+        resp = requests.get(API_URL, timeout=30)
         resp.raise_for_status()
         data = resp.json()
-        # Save only necessary fields to keep file small
-        cleaned = [
-            {
-                'concurso': int(item.get('concurso')),
-                'data': item.get('data'),
-                'dezenas': [int(n) for n in item.get('dezenas', [])],
-            }
-            for item in data
-        ]
-        with dest.open('w', encoding='utf-8') as f:
-            json.dump(cleaned, f, ensure_ascii=False, indent=2)
-        print("Done! Saved to", dest)
+        # Espera array de objetos com campos: concurso, data, dezenas (strings/nums)
+        with open(OUT_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        msg = f"Done! Saved to {OUT_FILE}"
+        print(msg)
+        return True, msg
     except Exception as e:
-        print("\nError downloading data:", e)
+        msg = f"Update failed: {e}"
+        print("\n" + msg, file=sys.stderr)
+        return False, msg
 
-
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    ok, msg = update_draws()
+    sys.exit(0 if ok else 1)

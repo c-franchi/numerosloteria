@@ -5,6 +5,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const strategy2Elem = document.getElementById('strategy2');
   const strategy3Elem = document.getElementById('strategy3');
   const submitBtn = document.getElementById('btn-submit');
+  const updateBtn = document.getElementById('btn-update');
   const form = document.getElementById('period-form');
 
   const recentSection = document.getElementById('recent-draws');
@@ -27,21 +28,6 @@ document.addEventListener('DOMContentLoaded', () => {
     return new Date(y, m - 1, d);
   };
 
-  fetch('data/draws.json')
-    .then(r => r.json())
-    .then(json => {
-      draws = json.map(d => ({
-        concurso: d.concurso,
-        date: parseBRDate(d.data),
-        data: d.data,
-        dezenas: d.dezenas.map(Number).sort((a,b)=>a-b)
-      })).sort((a, b) => b.date - a.date);
-
-      renderRecentDraws(draws);
-      recentSection.classList.remove('hidden');
-    })
-    .catch(() => console.warn('Não foi possível carregar data/draws.json'));
-
   function renderRecentDraws(list) {
     if (!tableBody) return;
     tableBody.innerHTML = '';
@@ -62,6 +48,49 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     if (drawCount) drawCount.textContent = `Exibindo ${Math.min(10, list.length)} de ${list.length}`;
   }
+
+  function loadDrawsAndRender() {
+    return fetch('data/draws.json?_=' + Date.now()) // cache-buster
+      .then(r => r.json())
+      .then(json => {
+        draws = json.map(d => ({
+          concurso: d.concurso,
+          date: parseBRDate(d.data),
+          data: d.data,
+          dezenas: d.dezenas.map(Number).sort((a,b)=>a-b)
+        })).sort((a, b) => b.date - a.date);
+
+        renderRecentDraws(draws);
+      })
+      .catch(err => {
+        console.warn('Não foi possível carregar data/draws.json', err);
+      });
+  }
+
+  // Carregamento inicial
+  loadDrawsAndRender().then(() => {
+    recentSection?.classList.remove('hidden');
+  });
+
+  // Atualização via backend Flask (/api/update)
+  updateBtn?.addEventListener('click', async () => {
+    updateBtn.disabled = true;
+    const original = updateBtn.textContent;
+    updateBtn.textContent = 'Atualizando...';
+    try {
+      const res = await fetch('/api/update', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || 'Erro na atualização');
+      await loadDrawsAndRender();
+      alert('Sorteios atualizados com sucesso!');
+    } catch (err) {
+      console.error(err);
+      alert('Falha ao atualizar: ' + err.message);
+    } finally {
+      updateBtn.textContent = original;
+      updateBtn.disabled = false;
+    }
+  });
 
   function filterByPeriod(period) {
     const now = new Date();
@@ -128,11 +157,10 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function lowHighDistribution(list) {
-    return mode(list.map(d => d.dezenas.filter(isLow).length)); // alvo: #baixos
+    return mode(list.map(d => d.dezenas.filter(isLow).length)); // alvo: #baixos (1..13)
   }
 
   function repeatsDistribution(list) {
-    // conta repetição entre pares consecutivos no período filtrado
     const reps = [];
     for (let i = 0; i < list.length - 1; i++) {
       reps.push(countRepeats(list[i].dezenas, list[i+1].dezenas));
@@ -149,24 +177,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ==== Estratégia 3: Padrões Aprendidos ====
   function generatePatternFitSuggestion(list) {
-    // 1) alvos aprendidos do período
     const targetEven = parityDistribution(list);     // pares
     const targetLow  = lowHighDistribution(list);    // baixos (1..13)
     let targetRep    = repeatsDistribution(list);    // repetidas
-    // clamp para intervalo comum observado (8–10), quando fizer sentido
     if (targetRep < 7) targetRep = 8;
     if (targetRep > 11) targetRep = 10;
 
-    const last = list[0]; // mais recente
-    const lastSet = new Set(last.dezenas);
-
-    // 2) pesos por frequência geral
+    const last = list[0];
     const { overall } = frequencies(list);
-    const byOverallDesc = [];
-    for (let n = 1; n <= 25; n++) byOverallDesc.push([n, overall[n]]);
-    byOverallDesc.sort((a,b)=> b[1]-a[1] || a[0]-b[0]);
 
-    // 3) começa pelas repetidas do último concurso
+    // Começa repetindo do último concurso (mais frequentes primeiro)
     const repeatedCandidates = last.dezenas
       .slice()
       .sort((a,b)=> overall[b]-overall[a] || a-b);
@@ -177,42 +197,40 @@ document.addEventListener('DOMContentLoaded', () => {
       pick.add(n);
     }
 
-    // 4) completa respeitando paridade e altos/baixos
+    // Completa respeitando paridade e altos/baixos
     const countEven = () => [...pick].filter(isEven).length;
     const countLow  = () => [...pick].filter(isLow).length;
 
-    function canAdd(n) {
+    function canAdd(n, byOverallDesc) {
       const nextEven = countEven() + (isEven(n)?1:0);
       const nextLow  = countLow()  + (isLow(n)?1:0);
       const remaining = 15 - (pick.size + 1);
-      // limites superiores: não deixar estourar muito antes de preencher
-      return nextEven <= targetEven && nextLow <= targetLow ||
-             remaining < 0; // fallback, deve encher mesmo se exceder
+      return nextEven <= targetEven && nextLow <= targetLow || remaining < 0;
     }
+
+    const byOverallDesc = [];
+    for (let n = 1; n <= 25; n++) byOverallDesc.push([n, overall[n]]);
+    byOverallDesc.sort((a,b)=> b[1]-a[1] || a[0]-b[0]);
 
     for (const [n] of byOverallDesc) {
       if (pick.size >= 15) break;
       if (pick.has(n)) continue;
-      if (canAdd(n)) pick.add(n);
+      if (canAdd(n, byOverallDesc)) pick.add(n);
     }
-
-    // 5) se ainda faltar, preenche com qualquer um por ordem de frequência
     for (const [n] of byOverallDesc) {
       if (pick.size >= 15) break;
       if (!pick.has(n)) pick.add(n);
     }
 
-    // 6) ajuste fino: se passamos de paridade/baixos, tenta trocar
+    // Rebalance (paridade e baixos) se exceder
     function rebalance(targetCount, getterFn, predicate) {
       let current = getterFn();
       if (current <= targetCount) return;
-      // remove excedentes menos frequentes e repõe por mais frequentes complementares
-      const chosen = [...pick].sort((a,b)=> overall[a]-overall[b]); // menos freq primeiro
+      const chosen = [...pick].sort((a,b)=> overall[a]-overall[b]);
       for (const rem of chosen) {
         if (current <= targetCount) break;
         if (predicate(rem)) {
           pick.delete(rem);
-          // encontra melhor reposição que não quebre o outro alvo demais
           for (const [cand] of byOverallDesc) {
             if (pick.size >= 15) break;
             if (pick.has(cand)) continue;
@@ -221,14 +239,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       }
     }
-
-    // rebalance pares e baixos na sequência
     rebalance(targetEven, () => [...pick].filter(isEven).length, isEven);
     rebalance(targetLow,  () => [...pick].filter(isLow).length,  isLow);
 
     return [...pick].slice(0,15);
   }
 
+  // Submit -> gerar sugestões
   form.addEventListener('submit', (ev) => {
     ev.preventDefault();
     submitBtn.disabled = true;
@@ -244,25 +261,24 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    // Estratégias 1 e 2 (como já estavam)
     const { overall, cols } = frequencies(list);
+
+    // Estratégia 1 — Hot Columns (5 por coluna)
     const s1 = [...new Set([
       ...topK(cols[0], 5),
       ...topK(cols[1], 5),
       ...topK(cols[2], 5)
     ])].slice(0, 15);
+
+    // Estratégia 2 — Cold Numbers (15 menos frequentes)
     const s2 = bottomK(overall, 15);
 
     // Estratégia 3 — Padrões Aprendidos
     const s3 = generatePatternFitSuggestion(list);
 
-    // Render
-    const renderChipsLocal = (el, nums, strong=false) => {
-      renderChips(el, nums, strong);
-    };
-    renderChipsLocal(strategy1Elem, s1, true);
-    renderChipsLocal(strategy2Elem, s2, false);
-    if (strategy3Elem) renderChipsLocal(strategy3Elem, s3, true);
+    renderChips(strategy1Elem, s1, true);
+    renderChips(strategy2Elem, s2, false);
+    renderChips(strategy3Elem, s3, true);
 
     resultsSection.classList.remove('hidden');
     submitBtn.disabled = false;

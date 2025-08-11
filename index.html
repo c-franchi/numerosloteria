@@ -25,10 +25,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
 
-  <!-- Seu CSS opcional (deixe se quiser) -->
-  <link rel="stylesheet" href="style.css" />
-
-  <!-- Classes utilitárias sem build (sem @apply) -->
+  <!-- Utilitários simples (sem build) -->
   <style>
     .badge {
       display:inline-flex;align-items:center;justify-content:center;
@@ -95,10 +92,19 @@
           <option value="all">Todos os resultados</option>
         </select>
       </div>
-      <button id="btn-submit" type="submit"
-              class="inline-flex items-center justify-center px-4 h-10 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700">
-        <i data-feather="zap" class="mr-2"></i> Gerar sugestões
-      </button>
+
+      <div class="flex gap-2">
+        <button id="btn-submit" type="submit"
+                class="inline-flex items-center justify-center px-4 h-10 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700">
+          <i data-feather="zap" class="mr-2"></i> Gerar sugestões
+        </button>
+
+        <!-- Botão de atualização (requer backend Flask rodando /api/update) -->
+        <button id="btn-update" type="button"
+                class="inline-flex items-center justify-center px-4 h-10 rounded-lg border border-slate-300 bg-white font-medium hover:bg-slate-100">
+          Atualizar sorteios agora
+        </button>
+      </div>
     </form>
   </section>
 
@@ -153,8 +159,6 @@
 
   <!-- Lógica -->
   <script src="main.js" defer></script>
-  <script>
-    window.addEventListener('load', () => feather.replace());
-  </script>
+  <script>window.addEventListener('load', () => feather.replace());</script>
 </body>
 </html>
