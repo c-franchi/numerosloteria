@@ -1,0 +1,18 @@
+/* Custom styles for Lotofácil suggestions page */
+body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+h1 {
+    font-size: 1.8rem;
+}
+
+#strategy1, #strategy2 {
+    word-break: break-word;
+}
+
+@media (max-width: 576px) {
+    h1 {
+        font-size: 1.5rem;
+    }
+}
