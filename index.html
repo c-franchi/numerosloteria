@@ -4,40 +4,33 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#4f46e5" />
-  <title>Lotofácil – Sugestões inteligentes</title>
+  <title>Lotofácil – Sugestões por Sequências</title>
 
-  <!-- Tailwind via CDN (ok para protótipo). Em produção, prefira CLI/PostCSS. -->
+  <!-- Tailwind via CDN (ok p/ protótipo; em produção prefira build) -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
-      theme: {
-        extend: { fontFamily: { sans: ['Inter','ui-sans-serif','system-ui'] } }
-      },
+      theme: { extend: { fontFamily: { sans: ['Inter','ui-sans-serif','system-ui'] } } },
       darkMode: 'class'
     }
   </script>
 
-  <!-- Ícones -->
+  <!-- Ícones e fonte -->
   <script src="https://unpkg.com/feather-icons"></script>
-
-  <!-- Fonte -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
 
-  <!-- Utilitários simples (sem build) -->
+  <!-- SweetAlert2 (alerts bonitos) -->
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+
+  <!-- Utilitários sem build -->
   <style>
-    .badge {
-      display:inline-flex;align-items:center;justify-content:center;
-      border-radius:9999px;background:#f1f5f9;color:#0f172a;
-      padding:0 12px;height:36px;font-size:15px;font-weight:600;
-      border:1px solid #e2e8f0;
-    }
-    .badge-strong { background:#4f46e5; color:#fff; border-color:#4f46e5; }
-    .number-chip{
-      display:inline-flex;align-items:center;justify-content:center;
-      border-radius:9999px;border:1px solid #e2e8f0;background:#fff;
-      height:38px;width:38px;font-weight:700;
-    }
+    .badge{display:inline-flex;align-items:center;justify-content:center;border-radius:9999px;
+      background:#f1f5f9;color:#0f172a;padding:0 12px;height:36px;font-size:15px;font-weight:600;border:1px solid #e2e8f0}
+    .badge-strong{background:#4f46e5;color:#fff;border-color:#4f46e5}
+    .number-chip{display:inline-flex;align-items:center;justify-content:center;border-radius:9999px;
+      border:1px solid #e2e8f0;background:#fff;height:38px;width:38px;font-weight:700}
+    .meta{font-size:.8rem;color:#64748b}
   </style>
 
   <link rel="icon" href="data:;base64,iVBORw0KGgo=" />
@@ -48,7 +41,7 @@
     <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
       <div class="flex items-center gap-3">
         <div class="h-10 w-10 rounded-2xl bg-indigo-600 text-white grid place-items-center font-bold">LF</div>
-        <h1 class="text-base sm:text-xl font-semibold">Lotofácil • Sugestões por frequência</h1>
+        <h1 class="text-base sm:text-xl font-semibold">Lotofácil • Sugestões por sequências</h1>
       </div>
       <button id="darkToggle" class="px-3 py-2 text-sm rounded-xl border border-slate-300 hover:bg-slate-100">
         Tema
@@ -60,22 +53,23 @@
   <section class="max-w-6xl mx-auto px-4 pt-6 pb-2">
     <div class="grid gap-4 sm:grid-cols-2">
       <div class="p-5 rounded-2xl bg-white border border-slate-200 shadow-sm">
-        <h2 class="text-lg sm:text-xl font-semibold mb-2">Gere 15 números inteligentes</h2>
+        <h2 class="text-lg sm:text-xl font-semibold mb-2">Sequências que mais se repetem</h2>
         <p class="text-slate-600 text-sm sm:text-base">
-          Aplique filtros por período e receba três sugestões:
-          <b>Hot Columns</b>, <b>Cold Numbers</b> e <b>Padrões Aprendidos</b>.
+          Para cada sorteio, dividimos as 15 dezenas em 3 colunas (posições 1–5, 6–10, 11–15) e contamos a
+          <b>sequência literal</b> de 5 números que mais se repete em cada coluna (desempate por recência).
         </p>
       </div>
       <div class="p-5 rounded-2xl bg-indigo-600 text-white shadow-sm">
-        <h3 class="text-lg sm:text-xl font-semibold mb-2">Como funciona a coluna</h3>
+        <h3 class="text-lg sm:text-xl font-semibold mb-2">Como geramos as sugestões</h3>
         <p class="text-indigo-50 text-sm sm:text-base">
-          Para cada sorteio, dividimos as 15 dezenas em 3 colunas (posições 1–5, 6–10, 11–15).
+          A) Top/Top/Top • B) Degrau cíclico • C) Aleatória entre Top-K. Duplicatas entre colunas são trocadas
+          por números ponderados pelas frequências da coluna.
         </p>
       </div>
     </div>
   </section>
 
-  <!-- CONTROLES (mobile-first: tudo 100% largura) -->
+  <!-- CONTROLES mobile-first -->
   <section class="max-w-6xl mx-auto px-4 py-4">
     <form id="period-form" class="grid grid-cols-1 sm:grid-cols-3 gap-3">
       <div class="sm:col-span-1">
@@ -91,30 +85,25 @@
       </div>
 
       <div class="sm:col-span-2 flex flex-col sm:flex-row gap-3 sm:items-end">
-        <!-- Gerar -->
         <button id="btn-submit" type="submit"
                 class="w-full sm:w-auto inline-flex items-center justify-center gap-2
                        h-12 px-5 rounded-2xl bg-indigo-600 text-white text-base font-semibold
-                       hover:bg-indigo-700 transition"
-                aria-busy="false">
+                       hover:bg-indigo-700 transition" aria-busy="false">
           <svg id="spin-generate" class="hidden animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none">
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
-            <path class="opacity-75" fill="currentColor"
-                  d="M4 12a8 8 0 018-8v4A4 4 0 004 12z"/>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4A4 4 0 004 12z"/>
           </svg>
           <span id="txt-generate">Gerar sugestões</span>
         </button>
 
-        <!-- Atualizar -->
+        <!-- Atualizar (Vercel serverless /api/update) -->
         <button id="btn-update" type="button"
                 class="w-full sm:w-auto inline-flex items-center justify-center gap-2
                        h-12 px-5 rounded-2xl border border-slate-300 bg-white text-base font-semibold
-                       hover:bg-slate-100 transition"
-                aria-busy="false">
+                       hover:bg-slate-100 transition" aria-busy="false">
           <svg id="spin-update" class="hidden animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none">
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
-            <path class="opacity-75" fill="currentColor"
-                  d="M4 12a8 8 0 018-8v4A4 4 0 004 12z"/>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4A4 4 0 004 12z"/>
           </svg>
           <span id="txt-update">Atualizar sorteios agora</span>
         </button>
@@ -126,19 +115,22 @@
   <section id="results" class="max-w-6xl mx-auto px-4 pb-2 hidden">
     <div class="grid gap-4 md:grid-cols-3">
       <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h4 class="text-base font-semibold mb-2">Estratégia 1 — Hot Columns</h4>
-        <p class="text-sm text-slate-600 mb-3">Top 5 de cada coluna (posições 1–5, 6–10, 11–15).</p>
-        <div id="strategy1" class="flex flex-wrap gap-2"></div>
+        <h4 class="text-base font-semibold mb-2">Sugestão A — Top/Top/Top</h4>
+        <p class="text-sm text-slate-600 mb-3">Sequência #1 de cada coluna.</p>
+        <div id="sugA" class="flex flex-wrap gap-2 mb-2"></div>
+        <div id="metaA" class="meta"></div>
       </div>
       <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h4 class="text-base font-semibold mb-2">Estratégia 2 — Cold Numbers</h4>
-        <p class="text-sm text-slate-600 mb-3">15 menos frequentes no período.</p>
-        <div id="strategy2" class="flex flex-wrap gap-2"></div>
+        <h4 class="text-base font-semibold mb-2">Sugestão B — Degrau cíclico</h4>
+        <p class="text-sm text-slate-600 mb-3">Clique após clique: (r, r+1, r+2) por coluna.</p>
+        <div id="sugB" class="flex flex-wrap gap-2 mb-2"></div>
+        <div id="metaB" class="meta"></div>
       </div>
       <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h4 class="text-base font-semibold mb-2">Estratégia 3 — Padrões Aprendidos</h4>
-        <p class="text-sm text-slate-600 mb-3">Paridade, altos/baixos e repetições “aprendidas”.</p>
-        <div id="strategy3" class="flex flex-wrap gap-2"></div>
+        <h4 class="text-base font-semibold mb-2">Sugestão C — Aleatória (Top-K)</h4>
+        <p class="text-sm text-slate-600 mb-3">Sorteia em cada coluna entre as sequências que cobrem ~80%.</p>
+        <div id="sugC" class="flex flex-wrap gap-2 mb-2"></div>
+        <div id="metaC" class="meta"></div>
       </div>
     </div>
   </section>
@@ -169,7 +161,6 @@
     * Este site utiliza dados públicos da Lotofácil para fins informativos.
   </footer>
 
-  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <script src="main.js" defer></script>
   <script>window.addEventListener('load', () => feather.replace());</script>
 </body>

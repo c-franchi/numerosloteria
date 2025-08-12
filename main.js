@@ -1,9 +1,16 @@
-// Mobile-friendly + loaders + 3 estratégias + atualização via /api/update (Vercel)
+// Sequências por coluna (5 números), desempate por recência.
+// Sugestões: A) Top/Top/Top  B) Degrau cíclico  C) Aleatória Top-K (~80%)
+// Duplicatas entre colunas são substituídas por números ponderados pela frequência da coluna.
+
 document.addEventListener('DOMContentLoaded', () => {
+  // UI
   const resultsSection = document.getElementById('results');
-  const strategy1Elem = document.getElementById('strategy1');
-  const strategy2Elem = document.getElementById('strategy2');
-  const strategy3Elem = document.getElementById('strategy3');
+  const sugA = document.getElementById('sugA');
+  const sugB = document.getElementById('sugB');
+  const sugC = document.getElementById('sugC');
+  const metaA = document.getElementById('metaA');
+  const metaB = document.getElementById('metaB');
+  const metaC = document.getElementById('metaC');
 
   const form = document.getElementById('period-form');
   const submitBtn = document.getElementById('btn-submit');
@@ -19,7 +26,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const drawCount = document.getElementById('drawCount');
   const darkToggle = document.getElementById('darkToggle');
 
+  // Estado
   let draws = [];
+  let seqRanks = null;     // [{rank: [{seq, count, lastSeenIdx}, ...]}, ...] por coluna
+  let numFreqCols = null;  // [freqPorNumero1..25] por coluna
 
   // Dark mode
   darkToggle?.addEventListener('click', () => {
@@ -28,11 +38,12 @@ document.addEventListener('DOMContentLoaded', () => {
     document.body.classList.toggle('text-slate-100');
   });
 
-  // Util
+  // Utils
   const parseBRDate = (br) => {
     const [d, m, y] = br.split('/').map(Number);
     return new Date(y, m - 1, d);
   };
+
   const normalize = (list) => list.map(d => ({
     concurso: d.concurso,
     date: parseBRDate(d.data),
@@ -69,7 +80,7 @@ document.addEventListener('DOMContentLoaded', () => {
       .catch(err => console.warn(err));
   }
 
-  // Atualização via Serverless (não persiste em arquivo; atualiza em memória)
+  // Atualização via Serverless (Vercel) – não persiste em arquivo, atualiza em memória
   async function updateFromAPI() {
     const res = await fetch('/api/update', { method: 'POST' });
     const text = await res.text();
@@ -83,25 +94,23 @@ document.addEventListener('DOMContentLoaded', () => {
     renderRecentDraws(draws);
   }
 
-  // ====== Estado de carregando nos botões ======
-  function setLoading(btn, spinnerEl, textEl, loading, labelWhenIdle) {
+  // Helpers loader
+  function setLoading(btn, spinnerEl, textEl, loading, idleText) {
     btn.disabled = loading;
     btn.setAttribute('aria-busy', String(loading));
     if (spinnerEl) spinnerEl.classList.toggle('hidden', !loading);
-    if (textEl) textEl.textContent = loading ? 'Aguarde…' : labelWhenIdle;
+    if (textEl) textEl.textContent = loading ? 'Aguarde…' : idleText;
   }
 
-  // Inicialização
+  // Inicializa
   loadStatic().then(() => {
     recentSection?.classList.remove('hidden');
   });
 
-  // Botão "Atualizar"
   updateBtn?.addEventListener('click', async () => {
     setLoading(updateBtn, spinUpdate, txtUpdate, true, 'Atualizar sorteios agora');
     try {
       await updateFromAPI();
-      // pequeno feedback visual (toast simples)
       if (window.Swal) Swal.fire({ icon: 'success', title: 'Atualizado!', timer: 1400, showConfirmButton: false });
     } catch (err) {
       console.error(err);
@@ -112,7 +121,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // ===== Lógica das estratégias =====
+  // ====== Núcleo: sequências por coluna ======
   function filterByPeriod(period) {
     const now = new Date();
     if (period === 'last_week') {
@@ -127,122 +136,183 @@ document.addEventListener('DOMContentLoaded', () => {
     return draws;
   }
 
-  function frequencies(list) {
-    const overall = Array(26).fill(0);
-    const cols = [Array(26).fill(0), Array(26).fill(0), Array(26).fill(0)];
-    list.forEach(d => {
-      d.dezenas.forEach((n, idx) => {
-        overall[n] += 1;
-        const colIdx = idx < 5 ? 0 : (idx < 10 ? 1 : 2);
-        cols[colIdx][n] += 1;
+  // Conta sequências (por coluna) e também frequência de números por coluna
+  function buildSequenceRanks(list) {
+    const maps = [new Map(), new Map(), new Map()]; // col0..2 => key "a-b-c-d-e" -> {count, lastSeenIdx, seq:Array}
+    const numFreq = [Array(26).fill(0), Array(26).fill(0), Array(26).fill(0)];
+    // list está ordenado desc por data; i=0 é mais recente (recência menor i)
+    list.forEach((d, i) => {
+      const colSeqs = [
+        d.dezenas.slice(0,5),
+        d.dezenas.slice(5,10),
+        d.dezenas.slice(10,15)
+      ];
+      colSeqs.forEach((seq, col) => {
+        const key = seq.join('-');
+        const m = maps[col];
+        const cur = m.get(key);
+        if (cur) {
+          cur.count += 1;
+          // recência: menor i é mais recente; guardo o menor
+          cur.lastSeenIdx = Math.min(cur.lastSeenIdx, i);
+        } else {
+          m.set(key, { count: 1, lastSeenIdx: i, seq: seq.slice() });
+        }
+        // num freq por coluna
+        seq.forEach(n => { numFreq[col][n] += 1; });
       });
     });
-    return { overall, cols };
-  }
-  function topK(freq, k) {
-    const arr = [];
-    for (let n = 1; n <= 25; n++) arr.push([n, freq[n]]);
-    arr.sort((a,b) => b[1] - a[1] || a[0] - b[0]);
-    return arr.slice(0, k).map(x => x[0]);
-  }
-  function bottomK(freq, k) {
-    const arr = [];
-    for (let n = 1; n <= 25; n++) arr.push([n, freq[n]]);
-    arr.sort((a,b) => a[1] - b[1] || a[0] - b[0]);
-    return arr.slice(0, k).map(x => x[0]);
+
+    // Constrói ranking (ordena por count desc, depois recência asc)
+    const ranks = maps.map(m => {
+      const arr = Array.from(m.values());
+      arr.sort((a,b) => b.count - a.count || a.lastSeenIdx - b.lastSeenIdx || compareSeq(a.seq,b.seq));
+      return arr;
+    });
+
+    return { ranks, numFreq };
   }
 
-  const isEven = n => n % 2 === 0;
-  const isLow  = n => n <= 13;
-
-  function countRepeats(a, b) {
-    const setB = new Set(b);
-    return a.filter(x => setB.has(x)).length;
-  }
-  function mode(arr) {
-    const map = new Map();
-    arr.forEach(v => map.set(v, (map.get(v)||0)+1));
-    let best = null, bestC = -1;
-    map.forEach((c,v) => { if (c > bestC) { best = v; bestC = c; }});
-    return best;
-  }
-  function parityDistribution(list) { return mode(list.map(d => d.dezenas.filter(isEven).length)); }
-  function lowHighDistribution(list) { return mode(list.map(d => d.dezenas.filter(isLow).length)); }
-  function repeatsDistribution(list) {
-    const reps = [];
-    for (let i = 0; i < list.length - 1; i++) reps.push(countRepeats(list[i].dezenas, list[i+1].dezenas));
-    return reps.length ? mode(reps) : 9;
+  function compareSeq(a, b) {
+    // desempate final: lexicográfico
+    for (let i=0;i<5;i++){ if (a[i]!==b[i]) return a[i]-b[i]; }
+    return 0;
   }
 
-  function renderChips(el, nums, strong=false) {
-    el.innerHTML = nums.slice().sort((a,b)=>a-b)
-      .map(n => `<span class="badge ${strong?'badge-strong':''}">${String(n).padStart(2,'0')}</span>`).join('');
-  }
-
-  function generatePatternFitSuggestion(list) {
-    const targetEven = parityDistribution(list);
-    const targetLow  = lowHighDistribution(list);
-    let targetRep    = repeatsDistribution(list);
-    if (targetRep < 7) targetRep = 8;
-    if (targetRep > 11) targetRep = 10;
-
-    const last = list[0];
-    const { overall } = frequencies(list);
-
-    const repeatedCandidates = last.dezenas.slice().sort((a,b)=> overall[b]-overall[a] || a-b);
-    const pick = new Set();
-    for (const n of repeatedCandidates) {
-      if (pick.size >= targetRep) break;
-      pick.add(n);
+  // ====== Deduplicação entre colunas com sorteio ponderado ======
+  function weightedPick(candidates, weights) {
+    // candidates: array de números possíveis, weights: array[1..25]
+    let sum = 0;
+    for (const n of candidates) sum += (weights[n] || 0);
+    if (sum <= 0) { // fallback uniforme
+      const idx = Math.floor(Math.random()*candidates.length);
+      return candidates[idx];
     }
-
-    const countEven = () => [...pick].filter(isEven).length;
-    const countLow  = () => [...pick].filter(isLow).length;
-
-    const byOverallDesc = [];
-    for (let n = 1; n <= 25; n++) byOverallDesc.push([n, overall[n]]);
-    byOverallDesc.sort((a,b)=> b[1]-a[1] || a[0]-b[0]);
-
-    function canAdd(n) {
-      const nextEven = countEven() + (isEven(n)?1:0);
-      const nextLow  = countLow()  + (isLow(n)?1:0);
-      const remaining = 15 - (pick.size + 1);
-      return nextEven <= targetEven && nextLow <= targetLow || remaining < 0;
+    let r = Math.random()*sum;
+    for (const n of candidates) {
+      r -= (weights[n] || 0);
+      if (r <= 0) return n;
     }
+    return candidates[candidates.length-1];
+  }
 
-    for (const [n] of byOverallDesc) {
-      if (pick.size >= 15) break;
-      if (pick.has(n)) continue;
-      if (canAdd(n)) pick.add(n);
-    }
-    for (const [n] of byOverallDesc) {
-      if (pick.size >= 15) break;
-      if (!pick.has(n)) pick.add(n);
-    }
-
-    function rebalance(targetCount, getterFn, predicate) {
-      let current = getterFn();
-      if (current <= targetCount) return;
-      const chosen = [...pick].sort((a,b)=> overall[a]-overall[b]);
-      for (const rem of chosen) {
-        if (current <= targetCount) break;
-        if (predicate(rem)) {
-          pick.delete(rem);
-          for (const [cand] of byOverallDesc) {
-            if (pick.size >= 15) break;
-            if (pick.has(cand)) continue;
-            if (!predicate(cand)) { pick.add(cand); current--; break; }
-          }
+  function deduplicateColumns(colArrays, numFreqCols) {
+    // colArrays: [ [5nums], [5nums], [5nums] ]
+    const used = new Set();
+    // garante unicidade dentro da própria coluna
+    for (let c=0;c<3;c++){
+      const seen = new Set();
+      for (let j=0;j<colArrays[c].length;j++){
+        let n = colArrays[c][j];
+        if (seen.has(n)) {
+          // já duplicado dentro da coluna: troco por candidato não usado na coluna
+          const candidates = [];
+          for (let x=1;x<=25;x++) if (!seen.has(x)) candidates.push(x);
+          n = weightedPick(candidates, numFreqCols[c]);
+          colArrays[c][j] = n;
         }
+        seen.add(n);
       }
     }
-    rebalance(targetEven, () => [...pick].filter(isEven).length, isEven);
-    rebalance(targetLow,  () => [...pick].filter(isLow).length,  isLow);
-
-    return [...pick].slice(0,15);
+    // agora remove duplicatas entre colunas, priorizando manter col0 e col1, e ajustando col2; depois col1
+    for (let c=0;c<3;c++){
+      for (let j=0;j<5;j++){
+        const n = colArrays[c][j];
+        if (used.has(n)) {
+          // substituir n nesta coluna por outro não usado globalmente nem repetido na coluna
+          const colSet = new Set(colArrays[c]);
+          const candidates = [];
+          for (let x=1;x<=25;x++){
+            if (!used.has(x) && !colSet.has(x)) candidates.push(x);
+          }
+          if (candidates.length === 0) {
+            // se esgotou, relaxa: só evita o 'used'
+            for (let x=1;x<=25;x++){ if (!used.has(x)) candidates.push(x); }
+          }
+          const pick = weightedPick(candidates, numFreqCols[c]);
+          colArrays[c][j] = pick;
+        }
+        used.add(colArrays[c][j]);
+      }
+    }
+    // ordena cada coluna
+    for (let c=0;c<3;c++) colArrays[c].sort((a,b)=>a-b);
+    return colArrays;
   }
 
-  // Submit -> gerar sugestões
+  // ====== Sugestões ======
+  function buildTopTopTop(ranks, numFreqCols) {
+    const seqs = [0,1,2].map(c => ranks[c]?.[0]?.seq?.slice() || []);
+    const cols = deduplicateColumns(seqs, numFreqCols);
+    return { nums: [...cols[0],...cols[1],...cols[2]], metas: explain(cols, ranks, [0,0,0]) };
+  }
+
+  function buildDegrau(ranks, numFreqCols) {
+    const key = 'seqCursor';
+    const r0 = parseInt(localStorage.getItem(key) || '0', 10);
+    const idxs = [
+      r0 % (ranks[0].length || 1),
+      (r0+1) % (ranks[1].length || 1),
+      (r0+2) % (ranks[2].length || 1),
+    ];
+    const seqs = [0,1,2].map(c => ranks[c][idxs[c]].seq.slice());
+    const cols = deduplicateColumns(seqs, numFreqCols);
+    // próximo clique
+    localStorage.setItem(key, String(r0+1));
+    return { nums: [...cols[0],...cols[1],...cols[2]], metas: explain(cols, ranks, idxs) };
+  }
+
+  function buildRandomTopK(ranks, numFreqCols, listLen) {
+    const pickIdx = (col) => {
+      // K adaptativo: cobre ~80% dos concursos desta coluna
+      const arr = ranks[col];
+      const target = Math.ceil(0.8 * listLen);
+      let cum = 0, K = 0;
+      for (let i=0;i<arr.length;i++){
+        cum += arr[i].count;
+        K = i+1;
+        if (cum >= target) break;
+      }
+      K = Math.max(5, Math.min(15, K));
+      K = Math.min(K, arr.length);
+      const i = Math.floor(Math.random()*K);
+      return i;
+    };
+    const idxs = [pickIdx(0), pickIdx(1), pickIdx(2)];
+    const seqs = [0,1,2].map(c => ranks[c][idxs[c]].seq.slice());
+    const cols = deduplicateColumns(seqs, numFreqCols);
+    return { nums: [...cols[0],...cols[1],...cols[2]], metas: explain(cols, ranks, idxs) };
+  }
+
+  function explain(cols, ranks, idxs) {
+    // retorna string com info de cada coluna: seq + freq
+    const parts = [0,1,2].map(c => {
+      const idx = idxs[c];
+      const info = ranks[c][idx];
+      const seqShown = cols[c].map(n=>String(n).padStart(2,'0')).join(' ');
+      const seqOrig = info.seq.map(n=>String(n).padStart(2,'0')).join(' ');
+      const changed = seqShown !== seqOrig ? ' (ajustada p/ evitar duplicatas)' : '';
+      return `C${c+1}: ${seqShown} • freq ${info.count}${changed}`;
+    });
+    return parts.join(' | ');
+  }
+
+  // Render helpers
+  function renderChips(el, nums) {
+    el.innerHTML = nums
+      .slice().sort((a,b)=>a-b)
+      .map(n => `<span class="badge badge-strong">${String(n).padStart(2,'0')}</span>`)
+      .join('');
+  }
+
+  // Build ranks + num freq para o período
+  function prepare(list) {
+    const { ranks, numFreq } = buildSequenceRanks(list);
+    seqRanks = ranks;
+    numFreqCols = numFreq;
+  }
+
+  // Submit => gerar 3 sugestões
   form.addEventListener('submit', (ev) => {
     ev.preventDefault();
     setLoading(submitBtn, spinGenerate, txtGenerate, true, 'Gerar sugestões');
@@ -257,24 +327,20 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    const { overall, cols } = frequencies(list);
-    const s1 = [...new Set([...topK(cols[0],5), ...topK(cols[1],5), ...topK(cols[2],5)])].slice(0,15);
-    const s2 = bottomK(overall, 15);
-    const s3 = generatePatternFitSuggestion(list);
+    // constrói rankings de sequências e frequências de números por coluna
+    prepare(list);
 
-    renderChips(strategy1Elem, s1, true);
-    renderChips(strategy2Elem, s2, false);
-    renderChips(strategy3Elem, s3, true);
+    // Sugestões
+    const A = buildTopTopTop(seqRanks, numFreqCols);
+    const B = buildDegrau(seqRanks, numFreqCols);
+    const C = buildRandomTopK(seqRanks, numFreqCols, list.length);
+
+    // Render
+    renderChips(sugA, A.nums);  metaA.textContent = A.metas;
+    renderChips(sugB, B.nums);  metaB.textContent = B.metas;
+    renderChips(sugC, C.nums);  metaC.textContent = C.metas;
 
     resultsSection.classList.remove('hidden');
     setLoading(submitBtn, spinGenerate, txtGenerate, false, 'Gerar sugestões');
   });
-
-  // helper
-  function setLoading(btn, spinnerEl, textEl, loading, idleText) {
-    btn.disabled = loading;
-    btn.setAttribute('aria-busy', String(loading));
-    if (spinnerEl) spinnerEl.classList.toggle('hidden', !loading);
-    if (textEl) textEl.textContent = loading ? 'Aguarde…' : idleText;
-  }
 });
